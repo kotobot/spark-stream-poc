@@ -1,21 +1,33 @@
 package org.example
 
+import java.time.Instant
+import java.util.Date
+
 import _root_.kafka.serializer.StringDecoder
 import _root_.kafka.utils.Json
+import org.apache.log4j.{Level, Logger}
 import org.apache.spark.SparkConf
 import org.apache.spark.streaming._
 import org.apache.spark.streaming.kafka.KafkaUtils
 import org.apache.spark.sql._
 import org.example.model.Event
 
+import scala.collection.mutable.ListBuffer
+
 object Main {
   def main(args: Array[String]) = {
+
+    Logger.getLogger("org").setLevel(Level.OFF);
+    Logger.getLogger("akka").setLevel(Level.OFF);
 
     val sparkConf = new SparkConf().setAppName("streamingPoc")
     val ssc = new StreamingContext(sparkConf, Seconds(2))
     //ssc.checkpoint("checkpoint")
 
     val kafkaParams = Map(
+      "zookeeper.connect" -> "localhost:2181",
+      "group.id" -> "spark-streaming-poc",
+      "zookeeper.connection.timeout.ms" -> "1000",
       "metadata.broker.list" -> "localhost:9092"
     )
 
@@ -24,26 +36,26 @@ object Main {
 
     import sqlContext.implicits._
 
-    val dataset = ssc.sparkContext.makeRDD(Seq[(String, String)]())
-
     val stream = KafkaUtils.createDirectStream[String, String, StringDecoder, StringDecoder](ssc, kafkaParams, Set("test"))
-    stream.start()
+    stream.print()
 
-    /*stream.foreachRDD { rdd =>
-      println("Count = " + rdd.count())
-      println("Content: \n" + rdd.collectAsMap())
-    }*/
+    val buffer = ListBuffer[String]() //naive approach: store in soe key-value DB in future
+    stream.foreachRDD(rdd =>
+      buffer ++= rdd.map(e => e._2).collect()
+    )
+
+    ssc.start()
     println("Streaming started")
-    stream.foreachRDD { batchRDD =>
-      println("In foreach RDD loop")
-      val united = dataset.union(batchRDD)
-      val jsonRDD = sqlContext.jsonRDD(dataset.map(e => e._2))
-      jsonRDD.registerTempTable("events")
-      val rows = sqlContext.sql("SELECT * FROM events").collect()
-      println("Query result: \n" + rows.map(r => r.mkString(", ")).mkString("\n"))
-    }
+    ssc.awaitTerminationOrTimeout(60000)
 
-    ssc.awaitTerminationOrTimeout(120000)
+    val rdd = ssc.sparkContext.makeRDD(buffer.toList)
+    val jsonRDD = sqlContext.jsonRDD(rdd)
+    jsonRDD.registerTempTable("events")
+    jsonRDD.printSchema()
+
+    val rows = sqlContext.sql("SELECT * FROM events").collect()
+
+    println("Query result: \n" + rows.map(r => r.mkString(", ")).mkString("\n"))
     println("Streaming finished")
   }
 
