@@ -7,6 +7,7 @@ import _root_.kafka.serializer.StringDecoder
 import _root_.kafka.utils.Json
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.SparkConf
+import org.apache.spark.rdd.RDD
 import org.apache.spark.streaming._
 import org.apache.spark.streaming.kafka.KafkaUtils
 import org.apache.spark.sql._
@@ -39,17 +40,17 @@ object Main {
     val stream = KafkaUtils.createDirectStream[String, String, StringDecoder, StringDecoder](ssc, kafkaParams, Set("test"))
     stream.print()
 
-    val buffer = ListBuffer[String]() //naive approach: store in soe key-value DB in future
+    var dataset: RDD[String] = ssc.sparkContext.emptyRDD[String]
     stream.foreachRDD(rdd =>
-      buffer ++= rdd.map(e => e._2).collect()
+      dataset = dataset.union(rdd.map(_._2))
     )
 
     ssc.start()
     println("Streaming started")
     ssc.awaitTerminationOrTimeout(60000)
 
-    val rdd = ssc.sparkContext.makeRDD(buffer.toList)
-    val jsonRDD = sqlContext.jsonRDD(rdd)
+    val jsonRDD = sqlContext.jsonRDD(dataset)
+
     jsonRDD.registerTempTable("events")
     jsonRDD.printSchema()
 
